@@ -3,6 +3,7 @@ import type { AuthUser, UserRole } from "@chordially/types";
 
 type StoredUser = AuthUser & {
   passwordHash: string;
+  banned?: boolean;
 };
 
 const users = new Map<string, StoredUser>();
@@ -54,6 +55,34 @@ export function getUserById(id: string) {
   }
 
   return null;
+}
+
+export function upgradeToArtist(userId: string): AuthUser | null {
+  for (const [email, user] of users.entries()) {
+    if (user.id === userId) {
+      const upgraded: StoredUser = { ...user, role: "artist" };
+      users.set(email, upgraded);
+      return toAuthUser(upgraded);
+    }
+  }
+  return null;
+}
+
+export function banUser(userId: string): boolean {
+  for (const [email, user] of users.entries()) {
+    if (user.id === userId) {
+      users.set(email, { ...user, banned: true });
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isBanned(userId: string): boolean {
+  for (const user of users.values()) {
+    if (user.id === userId) return user.banned === true;
+  }
+  return false;
 }
 
 function toAuthUser(user: StoredUser): AuthUser {
