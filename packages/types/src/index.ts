@@ -11,6 +11,23 @@ export type AuthSession = {
   token: string;
   userId: string;
   createdAt: string;
+  /** ISO timestamp of the most recent activity on this session. */
+  lastSeenAt: string;
+  /** ISO timestamp when the session was revoked; undefined if still active. */
+  revokedAt?: string;
+  /** Hint about where the session originated, e.g. "web" or "mobile". */
+  origin?: string;
+};
+
+export type RefreshToken = {
+  token: string;
+  sessionToken: string;
+  userId: string;
+  createdAt: string;
+  /** ISO timestamp after which this refresh token is no longer valid. */
+  expiresAt: string;
+  /** ISO timestamp when this token was consumed by a rotation; undefined if unused. */
+  usedAt?: string;
 };
 
 export type Milestone = {
@@ -18,3 +35,5 @@ export type Milestone = {
   title: string;
   goal: string;
 };
+
+export type { AuthErrorCode } from "./auth-contracts.js";

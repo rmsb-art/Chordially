@@ -37,6 +37,16 @@ export type SessionResponse = {
   session: AuthSession | null;
 };
 
+export type IntrospectResponse = {
+  user: AuthUser;
+  session: Omit<AuthSession, "revokedAt">;
+};
+
+export type RefreshResponse = {
+  session: AuthSession;
+  refreshToken: string;
+};
+
 // ── Error envelope ────────────────────────────────────────────────────────────
 
 export type AuthErrorCode =

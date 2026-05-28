@@ -1,67 +1,137 @@
-import type { AuthSession, AuthUser } from "@chordially/types";
+import { randomBytes } from "node:crypto";
 
-type RegisterInput = {
-  email: string;
-  password: string;
-  displayName: string;
-};
+import type { AuthSession, AuthUser, RefreshToken } from "@chordially/types";
 
-type LoginInput = {
-  email: string;
-  password: string;
-};
+import { env } from "./env.js";
+import { signAccessToken } from "./token-service.js";
 
-const users = new Map<string, AuthUser & { password: string }>();
+type RegisterInput = { email: string; password: string; displayName: string };
+type LoginInput    = { email: string; password: string; origin?: string };
+
+const users    = new Map<string, AuthUser & { password: string }>();
 const sessions = new Map<string, AuthSession>();
+const refreshTokens = new Map<string, RefreshToken>();
 
 export function resetAuthStore(): void {
   users.clear();
   sessions.clear();
+  refreshTokens.clear();
 }
 
 export function listUsers(): AuthUser[] {
-  return Array.from(users.values()).map(({ password: _password, ...user }) => user);
+  return [...users.values()].map(({ password: _, ...u }) => u);
 }
 
 export function registerUser(input: RegisterInput): AuthUser {
   const email = input.email.trim().toLowerCase();
-
-  if (users.has(email)) {
-    throw new Error("A user with that email already exists.");
-  }
+  if (users.has(email)) throw new Error("A user with that email already exists.");
 
   const user: AuthUser & { password: string } = {
     id: `user_${users.size + 1}`,
     email,
     displayName: input.displayName.trim(),
     role: "builder",
-    password: input.password
+    password: input.password,
   };
-
   users.set(email, user);
-
-  const { password: _password, ...safeUser } = user;
-  return safeUser;
+  const { password: _, ...safe } = user;
+  return safe;
 }
 
-export function loginUser(input: LoginInput): AuthSession {
+export function loginUser(input: LoginInput): { session: AuthSession; refreshToken: string } {
   const email = input.email.trim().toLowerCase();
-  const user = users.get(email);
+  const user  = users.get(email);
+  if (!user || user.password !== input.password) throw new Error("Invalid email or password.");
 
-  if (!user || user.password !== input.password) {
-    throw new Error("Invalid email or password.");
-  }
+  const now = new Date().toISOString();
 
+  // Build session record; token is a signed JWT.
   const session: AuthSession = {
-    token: `session_${sessions.size + 1}`,
-    userId: user.id,
-    createdAt: new Date().toISOString()
+    token:       signAccessToken({ sub: user.id, sid: `sess_${sessions.size + 1}` }),
+    userId:      user.id,
+    createdAt:   now,
+    lastSeenAt:  now,
+    origin:      input.origin,
   };
-
   sessions.set(session.token, session);
+
+  const rt = issueRefreshToken(session.token, user.id);
+  return { session, refreshToken: rt.token };
+}
+
+/** Revokes a session by marking revokedAt rather than deleting the record. */
+export function logoutUser(token: string): boolean {
+  const session = sessions.get(token);
+  if (!session) return false;
+  session.revokedAt = new Date().toISOString();
+  return true;
+}
+
+/** Returns the session only if it exists and has not been revoked. */
+export function getActiveSession(token: string): AuthSession | undefined {
+  const session = sessions.get(token);
+  if (!session || session.revokedAt) return undefined;
+  // Touch lastSeenAt on every lookup.
+  session.lastSeenAt = new Date().toISOString();
   return session;
 }
 
-export function logoutUser(token: string): boolean {
-  return sessions.delete(token);
+export function getUserById(id: string): AuthUser | undefined {
+  const entry = [...users.values()].find((u) => u.id === id);
+  if (!entry) return undefined;
+  const { password: _, ...safe } = entry;
+  return safe;
+}
+
+// ── Refresh token helpers ─────────────────────────────────────────────────────
+
+function issueRefreshToken(sessionToken: string, userId: string): RefreshToken {
+  const expiresAt = new Date(Date.now() + env.REFRESH_TTL_SECONDS * 1000).toISOString();
+  const rt: RefreshToken = {
+    token:        randomBytes(32).toString("hex"),
+    sessionToken,
+    userId,
+    createdAt:    new Date().toISOString(),
+    expiresAt,
+  };
+  refreshTokens.set(rt.token, rt);
+  return rt;
+}
+
+/**
+ * Rotates a refresh token: invalidates the old one and issues a new access
+ * token + refresh token pair. Replays of already-used tokens are rejected.
+ */
+export function rotateRefreshToken(
+  oldToken: string,
+): { session: AuthSession; refreshToken: string } {
+  const rt = refreshTokens.get(oldToken);
+
+  if (!rt)                                    throw new Error("Refresh token not found.");
+  if (rt.usedAt)                              throw new Error("Refresh token already used.");
+  if (new Date(rt.expiresAt) < new Date())    throw new Error("Refresh token expired.");
+
+  // Mark old token as consumed.
+  rt.usedAt = new Date().toISOString();
+
+  // Revoke the old session.
+  const oldSession = sessions.get(rt.sessionToken);
+  if (oldSession) oldSession.revokedAt = rt.usedAt;
+
+  // Find the user.
+  const user = [...users.values()].find((u) => u.id === rt.userId);
+  if (!user) throw new Error("User not found.");
+
+  const now = new Date().toISOString();
+  const newSession: AuthSession = {
+    token:      signAccessToken({ sub: user.id, sid: `sess_${sessions.size + 1}` }),
+    userId:     user.id,
+    createdAt:  now,
+    lastSeenAt: now,
+    origin:     oldSession?.origin,
+  };
+  sessions.set(newSession.token, newSession);
+
+  const newRt = issueRefreshToken(newSession.token, user.id);
+  return { session: newSession, refreshToken: newRt.token };
 }

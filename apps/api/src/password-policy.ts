@@ -1,4 +1,4 @@
-import type { AuthErrorCode } from "@chordially/types/auth-contracts";
+import type { AuthErrorCode } from "@chordially/types";
 
 export type PolicyResult =
   | { ok: true }

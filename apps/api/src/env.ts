@@ -6,7 +6,13 @@ loadEnv();
 const schema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  APP_NAME: z.string().min(1).default("chordially-api")
+  APP_NAME: z.string().min(1).default("chordially-api"),
+  /** Secret used to sign and verify JWT access tokens. */
+  JWT_SECRET: z.string().min(16).default("change-me-in-production-min-16ch"),
+  /** Access token lifetime in seconds (default 15 minutes). */
+  JWT_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  /** Refresh token lifetime in seconds (default 7 days). */
+  REFRESH_TTL_SECONDS: z.coerce.number().int().positive().default(604800),
 });
 
 export const env = schema.parse(process.env);
