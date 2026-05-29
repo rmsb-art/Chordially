@@ -1,8 +1,9 @@
-import express, { type Express } from "express";
-import { z } from "zod";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
+import { z, ZodError } from "zod";
 
 import { env } from "./env.js";
 import {
+  AuthServiceError,
   getUserById,
   listUsers,
   loginUser,
@@ -51,27 +52,30 @@ export function createApp(): Express {
   });
 
   // #320 – opaque duplicate-account response; #321 – rate-limited
-  app.post("/api/v1/auth/register", rateLimiters.register, (req, res) => {
-    const payload = registerSchema.parse(req.body);
+  app.post("/api/v1/auth/register", rateLimiters.register, (req, res, next) => {
     try {
+      const payload = registerSchema.parse(req.body);
       const user = registerUser(payload);
       res.status(201).json({ message: "Registration starter flow completed.", user });
-    } catch {
-      // Opaque response: do not reveal whether the account exists.
-      res.status(409).json({ error: "REGISTRATION_FAILED", message: "Unable to complete registration." });
+    } catch (err) {
+      next(err);
     }
   });
 
   // #321 – rate-limited
-  app.post("/api/v1/auth/login", rateLimiters.login, (req, res) => {
-    const payload = loginSchema.parse(req.body);
-    const ip = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim()
-      ?? req.socket.remoteAddress;
-    const userAgent = req.headers["user-agent"];
-    const { session, refreshToken } = loginUser({ ...payload, ip, userAgent });
-    // Redact telemetry from the response; it is stored server-side only.
-    const { ip: _ip, userAgent: _ua, ...safeSession } = session;
-    res.status(200).json({ message: "Login starter flow completed.", session: safeSession, refreshToken });
+  app.post("/api/v1/auth/login", rateLimiters.login, (req, res, next) => {
+    try {
+      const payload = loginSchema.parse(req.body);
+      const ip = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim()
+        ?? req.socket.remoteAddress;
+      const userAgent = req.headers["user-agent"];
+      const { session, refreshToken } = loginUser({ ...payload, ip, userAgent });
+      // Redact telemetry from the response; it is stored server-side only.
+      const { ip: _ip, userAgent: _ua, ...safeSession } = session;
+      res.status(200).json({ message: "Login starter flow completed.", session: safeSession, refreshToken });
+    } catch (err) {
+      next(err);
+    }
   });
 
   // #318 – single-session logout: revokes only the supplied token
@@ -109,10 +113,14 @@ export function createApp(): Express {
   });
 
   // #321 – rate-limited
-  app.post("/api/v1/auth/refresh", rateLimiters.refresh, (req, res) => {
-    const { refreshToken } = refreshSchema.parse(req.body);
-    const result = rotateRefreshToken(refreshToken);
-    res.json({ session: result.session, refreshToken: result.refreshToken });
+  app.post("/api/v1/auth/refresh", rateLimiters.refresh, (req, res, next) => {
+    try {
+      const { refreshToken } = refreshSchema.parse(req.body);
+      const result = rotateRefreshToken(refreshToken);
+      res.json({ session: result.session, refreshToken: result.refreshToken });
+    } catch (err) {
+      next(err);
+    }
   });
 
   // ── #323 – email verification ─────────────────────────────────────────────
@@ -164,6 +172,45 @@ export function createApp(): Express {
 
   app.get("/api/v1/admin/users", requireAuth, requireRole("admin"), (_req, res) => {
     res.json({ users: listUsers() });
+  });
+
+  /**
+   * Centralized error handler (#326).
+   *
+   * Maps known error types to a predictable { error, message } envelope:
+   *   - ZodError          → 400 MALFORMED_REQUEST
+   *   - AuthServiceError  → status derived from error code
+   *   - unknown           → 500 (message withheld from client)
+   *
+   * Add new AuthErrorCode → HTTP status mappings here as the taxonomy grows.
+   */
+  const HTTP_STATUS: Record<string, number> = {
+    DUPLICATE_EMAIL:      409,
+    INVALID_CREDENTIALS:  401,
+    INVALID_SESSION:      401,
+    POLICY_VIOLATION:     422,
+    MALFORMED_REQUEST:    400,
+    FORBIDDEN:            403,
+    TOKEN_EXPIRED:        401,
+    TOKEN_INVALID:        400,
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (err instanceof ZodError) {
+      res.status(400).json({ error: "MALFORMED_REQUEST", message: err.errors[0]?.message ?? "Invalid request." });
+      return;
+    }
+    if (err instanceof AuthServiceError) {
+      const status = HTTP_STATUS[err.code] ?? 500;
+      // DUPLICATE_EMAIL: use an opaque message to avoid email enumeration (#320).
+      const message = err.code === "DUPLICATE_EMAIL"
+        ? "Unable to complete registration."
+        : err.message;
+      res.status(status).json({ error: err.code, message });
+      return;
+    }
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "An unexpected error occurred." });
   });
 
   return app;
