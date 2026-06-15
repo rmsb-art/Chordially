@@ -355,13 +355,6 @@ development workflow.
 
 ---
 
-## Current Status
-
-Chordially is currently in active development.
-
-The current focus is on establishing the core application structure, authentication foundation, shared types, and the Stellar package scaffold. Once the base flows are stable, the project can expand into deeper creator and fan engagement features.
-
----
 
 ## License
 
