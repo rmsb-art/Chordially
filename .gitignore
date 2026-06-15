@@ -17,3 +17,7 @@ next-env.d.ts
 .local/
 *.db
 *.db-journal
+expo-env.d.ts
+apps/mobile/ios
+apps/mobile/android
+apps/mobile/web-build
