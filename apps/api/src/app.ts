@@ -1,5 +1,6 @@
 import express, { type Express } from "express"
 import { authRouter } from "./modules/auth/routes/auth.routes.js"
+import { creatorsRouter } from "./modules/creators/routes/creator.routes.js"
 import { usersRouter } from "./modules/users/routes/user.routes.js"
 import { errorHandler } from "./shared/middleware/error-handler.js"
 
@@ -13,6 +14,7 @@ export function createApp(): Express {
   })
 
   app.use("/api/auth", authRouter)
+  app.use("/api/creators", creatorsRouter)
   app.use("/api/users", usersRouter)
 
   app.use(errorHandler)
